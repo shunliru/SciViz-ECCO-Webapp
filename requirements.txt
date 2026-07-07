@@ -1,0 +1,10 @@
+numpy
+pyvista
+vtk
+trame
+trame-vuetify
+trame-vtk
+openvisus
+openvisuspy
+xmltodict
+boto3
