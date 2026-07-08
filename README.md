@@ -43,5 +43,5 @@ http://localhost:8081
 
 This app loads ECCO data through OpenVisus. Large spatial regions or high-resolution reads may require significant memory and long loading time.
 
-For development, use a small spatial region and reduced data quality.
+For development, use a small spatial region and reduced data quality (availale quality levels are -12, -9, -6, -3, and 0 with -12 being the worst quality and 0 being the best quality).
 
