@@ -261,6 +261,24 @@ def get_salinity_layer_controls():
 
     return layer_percentiles, layer_opacities, layer_cmap
 
+
+def get_salinity_values_from_percentiles(S, layer_percentiles):
+    """
+    Compute actual salinity values from the salinity layer percentiles.
+    """
+    S_vals = S[np.isfinite(S)]
+
+    if len(S_vals) == 0:
+        return []
+
+    salinity_values = []
+
+    for pct in layer_percentiles:
+        salinity_value = np.percentile(S_vals, pct)
+        salinity_values.append(float(salinity_value))
+
+    return salinity_values
+
 # =========================================================
 # 9. ADD VERTICAL VELOCITY HOTSPOTS
 # =========================================================
@@ -305,6 +323,54 @@ def add_velocity_hotspots(plotter, grid, percentile):
         print("Hotspot mesh is empty.")
 
 
+
+def add_downwelling_hotspots(plotter, grid, percentile=99.0):
+    """
+    Add downwelling hotspots.
+
+    Downwelling means strong negative vertical velocity.
+    If percentile = 99, this selects the bottom 1% most negative W values.
+    """
+    W = grid["W"]
+    W_vals = W[np.isfinite(W)]
+
+    negative_W = W_vals[W_vals < 0]
+
+    if len(negative_W) == 0:
+        print("No negative vertical velocity values found.")
+        return None
+
+    # For percentile=99, use the 1st percentile of negative W values
+    # because strongest downwelling is most negative.
+    downwelling_threshold = np.percentile(negative_W, 100.0 - percentile)
+
+    print(
+        f"Downwelling threshold: W <= {downwelling_threshold}",
+        flush=True,
+    )
+
+    w_min = np.nanmin(negative_W)
+
+    downwelling = grid.threshold(
+        value=[float(w_min), float(downwelling_threshold)],
+        scalars="W",
+    )
+
+    if downwelling.n_points == 0:
+        print("No downwelling hotspot mesh generated.")
+        return None
+
+    plotter.add_mesh(
+        downwelling,
+        scalars="W",
+        cmap="RdPu",
+        opacity=0.80,
+        show_scalar_bar=False,
+    )
+
+    return downwelling
+
+
 # =========================================================
 # 10. SCENE UPDATE
 # =========================================================
@@ -344,6 +410,19 @@ def update_scene(time_index, hotspot_percentile):
 
     # Add salinity layers colored by temperature anomaly
     layer_percentiles, layer_opacities, layer_cmap = get_salinity_layer_controls()
+    layer_salinity_values = get_salinity_values_from_percentiles(S, layer_percentiles,)
+
+    layer_info_lines = []
+
+    for i, (pct, sal, opacity) in enumerate(
+        zip(layer_percentiles, layer_salinity_values, layer_opacities),
+        start=1,
+    ):
+        layer_info_lines.append(
+            f"Layer {i}:  percentile {pct:.1f} , salinity {sal:.4f} ppt, opacity {opacity:.2f}"
+        )
+
+    layer_info_text = "\n".join(layer_info_lines)
 
     state.plot_info = f"""
         This figure plots the North American east coast salinity isosurfaces colored by temperature anomaly. 
@@ -355,13 +434,12 @@ def update_scene(time_index, hotspot_percentile):
         Hotspot percentile: {hotspot_percentile}
 
         Salinity layers: {len(layer_percentiles)}
-        Layer percentiles: {layer_percentiles}
-        Layer opacities: {layer_opacities}
+        {layer_info_text}
         Layer colormap: {layer_cmap}
 
         Surface geometry: salinity isosurfaces
         Surface color: temperature anomaly
-        Hotspot field: positive vertical velocity
+        Hotspot field: positive vertical velocity(green), negative vertical velocity(blue)
         """
 
     add_salinity_layers(
@@ -374,6 +452,12 @@ def update_scene(time_index, hotspot_percentile):
 
     # Add vertical velocity hotspots
     add_velocity_hotspots(
+        plotter,
+        grid,
+        percentile=float(hotspot_percentile),
+    )
+
+    add_downwelling_hotspots(
         plotter,
         grid,
         percentile=float(hotspot_percentile),
