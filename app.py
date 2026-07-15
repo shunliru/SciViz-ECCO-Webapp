@@ -25,6 +25,11 @@ temperature = "pelican://osg-htc.org/nasa/nsdf/climate1/llc4320/idx/theta/theta_
 salinity = "pelican://osg-htc.org/nasa/nsdf/climate1/llc4320/idx/salt/salt_llc4320_x_y_depth.idx"
 vertical_velocity = "pelican://osg-htc.org/nasa/nsdf/climate2/llc4320/idx/w/w_llc4320_x_y_depth.idx"
 
+#equivalent URL in case pelican does not work
+#temperature = "osdf:///nasa/nsdf/climate1/llc4320/idx/theta/theta_llc4320_x_y_depth.idx"
+#salinity = "osdf:///nasa/nsdf/climate1/llc4320/idx/salt/salt_llc4320_x_y_depth.idx"
+#vertical_velocity = "osdf:///nasa/nsdf/climate2/llc4320/idx/w/w_llc4320_x_y_depth.idx"
+
 # Time slider range (adjust as needed)
 TIME_MIN = 0
 TIME_MAX = 10000
@@ -69,12 +74,14 @@ def read_time_step(time_index):
 
     # land mask from salinity
     ocean_mask = (S != 0)
+    land_mask = (S == 0)
 
     T = np.where(ocean_mask, T, np.nan)
     S = np.where(ocean_mask, S, np.nan)
     W = np.where(ocean_mask, W, np.nan)
 
-    return T, S, W
+
+    return T, S, W, land_mask
 
 
 # =========================================================
@@ -82,7 +89,7 @@ def read_time_step(time_index):
 # =========================================================
 
 # Use baseline time = 0
-T0, S0, W0 = read_time_step(time_index=0)
+T0, S0, W0, land_mask = read_time_step(time_index=0)
 
 # One scalar regional average temperature
 T_ref = np.nanmean(T0)
@@ -106,7 +113,7 @@ def zyx_to_pyvista(arr):
 # 6. BUILD GRID
 # =========================================================
 
-def make_grid(T, S, W):
+def make_grid(T, S, W, land_mask):
     """
     Build a PyVista ImageData grid with:
       - salinity S
@@ -126,9 +133,49 @@ def make_grid(T, S, W):
     grid.point_data["S"] = zyx_to_pyvista(S)
     grid.point_data["W"] = zyx_to_pyvista(W)
     grid.point_data["T_anom"] = zyx_to_pyvista(T_anom)
+    grid["land"] = zyx_to_pyvista(land_mask.astype(float))
 
     return grid
 
+
+def add_origin_axes(plotter, grid):
+    """
+    Draw x, y, z axes starting from the true origin (0, 0, 0).
+    """
+    bounds = grid.bounds
+
+    x_max = bounds[1]
+    y_max = bounds[3]
+    z_max = bounds[5]
+
+    origin = (0.0, 0.0, 0.0)
+
+    x_axis = pv.Line(origin, (x_max, 0.0, 0.0))
+    y_axis = pv.Line(origin, (0.0, y_max, 0.0))
+    z_axis = pv.Line(origin, (0.0, 0.0, z_max))
+
+    plotter.add_mesh(x_axis, color="black", line_width=5, label="Longitude")
+    plotter.add_mesh(y_axis, color="black", line_width=5, label="Latitude")
+    plotter.add_mesh(z_axis, color="black", line_width=5, label="Depth Levels")
+
+    plotter.show_bounds(
+    xlabel="Longitude",
+    ylabel="Latitude",
+    zlabel="Depth Levels",
+)
+
+def transform_z_axis(grid, z_max=90.0):
+    """
+    Transform z so that:
+        old z = 0   -> new z = z_max
+        old z = z_max -> new z = 0
+
+    Example with z_max=90:
+        z_new = 90 - z_old
+    """
+    grid = grid.copy()
+    grid.points[:, 2] = z_max - grid.points[:, 2]
+    return grid
 
 # =========================================================
 # 7. SAFE PLOTTING HELPER
@@ -142,6 +189,7 @@ def safe_add_mesh(plotter, mesh, **kwargs):
         plotter.add_mesh(mesh, **kwargs)
         return True
     return False
+
 
 
 # =========================================================
@@ -229,7 +277,12 @@ def get_salinity_layer_controls():
     Supports fewer than 4 layers safely.
     """
     n = int(safe_float(getattr(state, "num_salinity_layers", 4), 4))
-    n = int(clamp(n, 1, 4))
+    n = int(clamp(n, 0, 4))
+
+    layer_cmap = getattr(state, "salinity_cmap", "coolwarm")
+
+    if n == 0:
+        return [], [], layer_cmap
 
     default_percentiles = [20.0, 40.0, 60.0, 80.0]
     default_opacities = [0.45, 0.45, 0.45, 0.45]
@@ -370,9 +423,38 @@ def add_downwelling_hotspots(plotter, grid, percentile=99.0):
 
     return downwelling
 
+# =========================================================
+# 10. ADD LAND
+# =========================================================
+
+def add_land(plotter, grid):
+    """
+    Add land as a gray mesh.
+
+    land = 1 means land
+    land = 0 means ocean
+    """
+    land = grid.threshold(
+        value=0.5,
+        scalars="land",
+    )
+
+    if land.n_points == 0:
+        print("No land mesh generated.", flush=True)
+        return None
+
+    plotter.add_mesh(
+        land,
+        color="lightgray",
+        opacity=0.7,
+        show_scalar_bar=False,
+    )
+
+    return land
+
 
 # =========================================================
-# 10. SCENE UPDATE
+# 11. SCENE UPDATE
 # =========================================================
 
 plotter = pv.Plotter()
@@ -389,7 +471,7 @@ def update_scene(time_index, hotspot_percentile):
     plotter.clear()
 
     # Read data
-    T, S, W = read_time_step(time_index=time_index)
+    T, S, W, land_mask = read_time_step(time_index=time_index)
 
     print("T shape:", T.shape)
     print("Finite T:", np.isfinite(T).sum())
@@ -397,7 +479,10 @@ def update_scene(time_index, hotspot_percentile):
     print("Finite W:", np.isfinite(W).sum())
 
     # Build grid
-    grid = make_grid(T, S, W)
+    grid = make_grid(T, S, W, land_mask)
+
+    # Transform z: 0 -> 90 and 90 -> 0
+    #grid = transform_z_axis(grid, z_max=90.0)
 
     print("Grid points:", grid.n_points)
     print("Grid dimensions:", grid.dimensions)
@@ -407,6 +492,8 @@ def update_scene(time_index, hotspot_percentile):
         grid.outline(),
         color="black",
     )
+
+    add_origin_axes(plotter, grid)
 
     # Add salinity layers colored by temperature anomaly
     layer_percentiles, layer_opacities, layer_cmap = get_salinity_layer_controls()
@@ -439,8 +526,10 @@ def update_scene(time_index, hotspot_percentile):
 
         Surface geometry: salinity isosurfaces
         Surface color: temperature anomaly
-        Hotspot field: positive vertical velocity(green), negative vertical velocity(blue)
+        Hotspot field: positive vertical velocity(green), negative vertical velocity(purple)
         """
+
+    add_land(plotter, grid)
 
     add_salinity_layers(
         plotter,
@@ -473,7 +562,7 @@ def update_scene(time_index, hotspot_percentile):
 
 
 # =========================================================
-# 11. TRAME APP
+# 12. TRAME APP
 # =========================================================
 
 print("Creating server...", flush=True)
@@ -537,7 +626,7 @@ def load_current_time():
 ctrl.load_current_time = load_current_time
 
 # =========================================================
-# 12. UI LAYOUT
+# 13. UI LAYOUT
 # =========================================================
 print("Building UI...", flush=True)
 
@@ -571,7 +660,7 @@ with SinglePageWithDrawerLayout(server) as layout:
 
         vuetify.VTextField(
             v_model=("num_salinity_layers", 4),
-            min=1,
+            min=0,
             max=4,
             step=1,
             label="Number of salinity layers",
@@ -686,7 +775,7 @@ with SinglePageWithDrawerLayout(server) as layout:
 
 
 # =========================================================
-# 13. START
+# 14. START
 # =========================================================
 
 if __name__ == "__main__":
