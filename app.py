@@ -85,7 +85,7 @@ def read_time_step(time_index):
 
 
 # =========================================================
-# 4. REFERENCE TEMPERATURE (OPTION A)
+# 4. REFERENCE TEMPERATURE 
 # =========================================================
 
 # Use baseline time = 0

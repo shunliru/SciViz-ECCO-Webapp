@@ -8,3 +8,6 @@ openvisus
 openvisuspy
 xmltodict
 boto3
+colorcet
+bokeh
+panel
