@@ -9,7 +9,7 @@ from trame.widgets import vuetify3 as vuetify
 from trame.widgets import html
 from pyvista.trame.ui import plotter_ui
 
-
+from datetime import datetime, timedelta
 
 # =========================================================
 # 1. CONFIG
@@ -83,9 +83,22 @@ def read_time_step(time_index):
 
     return T, S, W, land_mask
 
+# =========================================================
+# 4. DATE CONVERSION
+# =========================================================
+
+START_TIME = datetime(2011, 9, 13, 0, 0, 0)
+
+
+def get_datetime_from_timestep(t):
+    """
+    Convert ECCO timestep index to actual datetime.
+    Assumption: each timestep is 1 hour.
+    """
+    return START_TIME + timedelta(hours=int(t))
 
 # =========================================================
-# 4. REFERENCE TEMPERATURE 
+# 5. REFERENCE TEMPERATURE 
 # =========================================================
 
 # Use baseline time = 0
@@ -98,7 +111,7 @@ print("Reference average temperature T_ref =", T_ref)
 
 
 # =========================================================
-# 5. ARRAY CONVERSION
+# 6. ARRAY CONVERSION
 # =========================================================
 
 def zyx_to_pyvista(arr):
@@ -110,7 +123,7 @@ def zyx_to_pyvista(arr):
 
 
 # =========================================================
-# 6. BUILD GRID
+# 7. BUILD GRID
 # =========================================================
 
 def make_grid(T, S, W, land_mask):
@@ -178,7 +191,7 @@ def transform_z_axis(grid, z_max=90.0):
     return grid
 
 # =========================================================
-# 7. SAFE PLOTTING HELPER
+# 8. SAFE PLOTTING HELPER
 # =========================================================
 
 def safe_add_mesh(plotter, mesh, **kwargs):
@@ -193,7 +206,7 @@ def safe_add_mesh(plotter, mesh, **kwargs):
 
 
 # =========================================================
-# 8. ADD SALINITY LAYERS
+# 9. ADD SALINITY LAYERS
 # =========================================================
 
 def add_salinity_layers(
@@ -333,7 +346,7 @@ def get_salinity_values_from_percentiles(S, layer_percentiles):
     return salinity_values
 
 # =========================================================
-# 9. ADD VERTICAL VELOCITY HOTSPOTS
+# 10. ADD VERTICAL VELOCITY HOTSPOTS
 # =========================================================
 
 def add_velocity_hotspots(plotter, grid, percentile):
@@ -424,7 +437,7 @@ def add_downwelling_hotspots(plotter, grid, percentile=99.0):
     return downwelling
 
 # =========================================================
-# 10. ADD LAND
+# 11. ADD LAND
 # =========================================================
 
 def add_land(plotter, grid):
@@ -454,7 +467,7 @@ def add_land(plotter, grid):
 
 
 # =========================================================
-# 11. SCENE UPDATE
+# 12. SCENE UPDATE
 # =========================================================
 
 plotter = pv.Plotter()
@@ -477,6 +490,10 @@ def update_scene(time_index, hotspot_percentile):
     print("Finite T:", np.isfinite(T).sum())
     print("Finite S:", np.isfinite(S).sum())
     print("Finite W:", np.isfinite(W).sum())
+
+    # Convert datetime
+    current_time = get_datetime_from_timestep(time_index)
+    current_time_str = current_time.strftime("%Y-%m-%d %H:%M:%S")
 
     # Build grid
     grid = make_grid(T, S, W, land_mask)
@@ -518,6 +535,7 @@ def update_scene(time_index, hotspot_percentile):
         Once finished, click the Load/Update button to wait for the data to load and the changes to take effect. 
 
         Time index: {time_index}
+        Current simulation time: {current_time_str}
         Hotspot percentile: {hotspot_percentile}
 
         Salinity layers: {len(layer_percentiles)}
@@ -562,7 +580,7 @@ def update_scene(time_index, hotspot_percentile):
 
 
 # =========================================================
-# 12. TRAME APP
+# 13. TRAME APP
 # =========================================================
 
 print("Creating server...", flush=True)
@@ -626,7 +644,7 @@ def load_current_time():
 ctrl.load_current_time = load_current_time
 
 # =========================================================
-# 13. UI LAYOUT
+# 14. UI LAYOUT
 # =========================================================
 print("Building UI...", flush=True)
 
@@ -775,7 +793,7 @@ with SinglePageWithDrawerLayout(server) as layout:
 
 
 # =========================================================
-# 14. START
+# 15. START
 # =========================================================
 
 if __name__ == "__main__":
