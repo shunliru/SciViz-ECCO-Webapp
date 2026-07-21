@@ -11,3 +11,6 @@ boto3
 colorcet
 bokeh
 panel
+xarray
+netCDF4
+cftime

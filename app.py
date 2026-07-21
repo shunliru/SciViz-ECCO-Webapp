@@ -11,6 +11,8 @@ from pyvista.trame.ui import plotter_ui
 
 from datetime import datetime, timedelta
 
+import xarray as xr
+
 # =========================================================
 # 1. CONFIG
 # =========================================================
@@ -54,6 +56,31 @@ t_ds = ovp.LoadDataset(temperature)
 s_ds = ovp.LoadDataset(salinity)
 w_ds = ovp.LoadDataset(vertical_velocity)
 
+latlon_ds = xr.open_dataset("./llc4320_latlon.nc", engine="netcdf4")
+lat_center = latlon_ds["latitude"].values
+lon_center = latlon_ds["longitude"].values
+
+# def extract_data_latlon(lat_center, lon_center, x_range, y_range):
+#     lat = lat_center[y_range[0]:y_range[1], x_range[0]:x_range[1]]
+#     lon = lon_center[y_range[0]:y_range[1], x_range[0]:x_range[1]]
+#     return lat, lon
+
+def extract_data_latlon_matching(lat_center, lon_center, x_range, y_range, nx, ny):
+    """
+    Extract lat/lon and resample them to match the actual data shape.
+
+    This is needed when OpenVisus quality < 0 returns downsampled data.
+    """
+    x0, x1 = x_range
+    y0, y1 = y_range
+
+    x_idx = np.linspace(x0, x1 - 1, nx).astype(int)
+    y_idx = np.linspace(y0, y1 - 1, ny).astype(int)
+
+    lat = lat_center[np.ix_(y_idx, x_idx)]
+    lon = lon_center[np.ix_(y_idx, x_idx)]
+
+    return lat, lon
 
 # =========================================================
 # 3. DATA READING
@@ -80,8 +107,23 @@ def read_time_step(time_index):
     S = np.where(ocean_mask, S, np.nan)
     W = np.where(ocean_mask, W, np.nan)
 
+    # lat, lon = extract_data_latlon(
+    #     lat_center,
+    #     lon_center,
+    #     READ_KWARGS["x"],
+    #     READ_KWARGS["y"],
+    # )
+    nz, ny, nx = T.shape
 
-    return T, S, W, land_mask
+    lat, lon = extract_data_latlon_matching(
+        lat_center,
+        lon_center,
+        READ_KWARGS["x"],
+        READ_KWARGS["y"],
+        nx,
+        ny,
+    )
+    return T, S, W, land_mask, lat, lon
 
 # =========================================================
 # 4. DATE CONVERSION
@@ -97,18 +139,28 @@ def get_datetime_from_timestep(t):
     """
     return START_TIME + timedelta(hours=int(t))
 
+
+
 # =========================================================
 # 5. REFERENCE TEMPERATURE 
 # =========================================================
 
-# Use baseline time = 0
-T0, S0, W0, land_mask = read_time_step(time_index=0)
-
 # One scalar regional average temperature
-T_ref = np.nanmean(T0)
+T_ref = None
 
-print("Reference average temperature T_ref =", T_ref)
+# Get reference temperature at time 0, comment out if you want a fixed reference temperature or at a fixed timestep
+def get_reference_temperature():
+    global T_ref
 
+    if T_ref is None:
+        print("Loading reference temperature at time 0...", flush=True)
+
+        T0, S0, W0, land_mask0, lat2d0, lon2d0 = read_time_step(time_index=0)
+        T_ref = np.nanmean(T0)
+
+        print("Computed T_ref =", T_ref, flush=True)
+
+    return T_ref
 
 # =========================================================
 # 6. ARRAY CONVERSION
@@ -126,56 +178,165 @@ def zyx_to_pyvista(arr):
 # 7. BUILD GRID
 # =========================================================
 
-def make_grid(T, S, W, land_mask):
-    """
-    Build a PyVista ImageData grid with:
-      - salinity S
-      - vertical velocity W
-      - temperature anomaly T_anom = T - T_ref
-    """
-    T_anom = T - T_ref
+# def make_grid(T, S, W, land_mask):
+#     """
+#     Build a PyVista ImageData grid with:
+#       - salinity S
+#       - vertical velocity W
+#       - temperature anomaly T_anom = T - T_ref
+#     """
+#     T_anom = T - T_ref
 
+#     nz, ny, nx = T.shape
+
+#     grid = pv.ImageData()
+#     grid.dimensions = (nx, ny, nz)
+#     grid.spacing = (1.0, 1.0, 1.0)
+#     grid.origin = (0.0, 0.0, 0.0)
+
+#     grid.point_data["T"] = zyx_to_pyvista(T)
+#     grid.point_data["S"] = zyx_to_pyvista(S)
+#     grid.point_data["W"] = zyx_to_pyvista(W)
+#     grid.point_data["T_anom"] = zyx_to_pyvista(T_anom)
+#     grid["land"] = zyx_to_pyvista(land_mask.astype(float))
+
+#     return grid
+
+# def make_grid(T, S, W, land_mask, lat2d, lon2d):
+#     """
+#     Build a PyVista StructuredGrid using real longitude/latitude coordinates.
+
+#     Input data shape:
+#         T, S, W, land_mask: (z, y, x)
+#         lat2d, lon2d:       (y, x)
+
+#     PyVista grid coordinate shape:
+#         (x, y, z)
+#     """
+#     nz, ny, nx = T.shape
+
+#     # Convert horizontal coordinates from (y, x) to (x, y)
+#     lon_xy = lon2d.T
+#     lat_xy = lat2d.T
+
+#     # Vertical coordinate: still use depth level index
+#     z_levels = np.arange(nz, dtype=float)
+
+#     # Build 3D coordinate arrays with shape (x, y, z)
+#     lon_xyz = np.repeat(lon_xy[:, :, None], nz, axis=2)
+#     lat_xyz = np.repeat(lat_xy[:, :, None], nz, axis=2)
+#     z_xyz = np.repeat(z_levels[None, None, :], nx, axis=0)
+#     z_xyz = np.repeat(z_xyz, ny, axis=1)
+
+#     # diagnosis print
+#     print("T shape:", T.shape, flush=True)
+#     print("lat2d shape:", lat2d.shape, flush=True)
+#     print("lon2d shape:", lon2d.shape, flush=True)
+#     print("lon_xyz shape:", lon_xyz.shape, flush=True)
+#     print("lat_xyz shape:", lat_xyz.shape, flush=True)
+#     print("z_xyz shape:", z_xyz.shape, flush=True)
+
+#     grid = pv.StructuredGrid(lon_xyz, lat_xyz, z_xyz)
+
+#     # Attach scalar fields
+#     grid["T"] = zyx_to_pyvista(T)
+#     grid["S"] = zyx_to_pyvista(S)
+#     grid["W"] = zyx_to_pyvista(W)
+#     grid["land"] = zyx_to_pyvista(land_mask.astype(float))
+
+#     return grid
+
+def make_grid(T, S, W, land_mask, lat2d, lon2d, T_anom):
     nz, ny, nx = T.shape
 
-    grid = pv.ImageData()
-    grid.dimensions = (nx, ny, nz)
-    grid.spacing = (1.0, 1.0, 1.0)
-    grid.origin = (0.0, 0.0, 0.0)
+    print("T shape:", T.shape, flush=True)
+    print("lat2d shape:", lat2d.shape, flush=True)
+    print("lon2d shape:", lon2d.shape, flush=True)
 
-    grid.point_data["T"] = zyx_to_pyvista(T)
-    grid.point_data["S"] = zyx_to_pyvista(S)
-    grid.point_data["W"] = zyx_to_pyvista(W)
-    grid.point_data["T_anom"] = zyx_to_pyvista(T_anom)
+    if lat2d.shape != (ny, nx):
+        raise ValueError(f"lat2d shape {lat2d.shape} does not match data horizontal shape {(ny, nx)}")
+
+    if lon2d.shape != (ny, nx):
+        raise ValueError(f"lon2d shape {lon2d.shape} does not match data horizontal shape {(ny, nx)}")
+
+    lon_xy = lon2d.T
+    lat_xy = lat2d.T
+    z_levels = np.arange(nz, dtype=float)
+
+    lon_xyz, lat_xyz, z_xyz = np.meshgrid(
+        lon_xy[:, 0],
+        lat_xy[0, :],
+        z_levels,
+        indexing="ij",
+    )
+
+    # Better for curvilinear lon/lat:
+    lon_xyz = np.repeat(lon_xy[:, :, None], nz, axis=2)
+    lat_xyz = np.repeat(lat_xy[:, :, None], nz, axis=2)
+    z_xyz = np.repeat(z_levels[None, None, :], nx, axis=0)
+    z_xyz = np.repeat(z_xyz, ny, axis=1)
+
+    print("lon_xyz shape:", lon_xyz.shape, flush=True)
+    print("lat_xyz shape:", lat_xyz.shape, flush=True)
+    print("z_xyz shape:", z_xyz.shape, flush=True)
+
+    grid = pv.StructuredGrid(lon_xyz, lat_xyz, z_xyz)
+
+    grid["T"] = zyx_to_pyvista(T)
+    grid["S"] = zyx_to_pyvista(S)
+    grid["W"] = zyx_to_pyvista(W)
     grid["land"] = zyx_to_pyvista(land_mask.astype(float))
+    grid["T_anom"] = zyx_to_pyvista(T_anom)
 
     return grid
 
 
-def add_origin_axes(plotter, grid):
+# def add_origin_axes(plotter, grid):
+#     """
+#     Draw x, y, z axes starting from the true origin (0, 0, 0).
+#     """
+#     bounds = grid.bounds
+
+#     x_max = bounds[1]
+#     y_max = bounds[3]
+#     z_max = bounds[5]
+
+#     origin = (0.0, 0.0, 0.0)
+
+#     x_axis = pv.Line(origin, (x_max, 0.0, 0.0))
+#     y_axis = pv.Line(origin, (0.0, y_max, 0.0))
+#     z_axis = pv.Line(origin, (0.0, 0.0, z_max))
+
+#     plotter.add_mesh(x_axis, color="black", line_width=5, label="Longitude")
+#     plotter.add_mesh(y_axis, color="black", line_width=5, label="Latitude")
+#     plotter.add_mesh(z_axis, color="black", line_width=5, label="Depth Levels")
+
+#     plotter.show_bounds(
+#     xlabel="Longitude",
+#     ylabel="Latitude",
+#     zlabel="Depth Levels",
+# )
+
+def add_selected_region_axes(plotter, grid):
     """
-    Draw x, y, z axes starting from the true origin (0, 0, 0).
+    Draw axes using the selected region's bounding box.
     """
     bounds = grid.bounds
 
-    x_max = bounds[1]
-    y_max = bounds[3]
-    z_max = bounds[5]
+    x_min, x_max = bounds[0], bounds[1]
+    y_min, y_max = bounds[2], bounds[3]
+    z_min, z_max = bounds[4], bounds[5]
 
-    origin = (0.0, 0.0, 0.0)
+    # Corner of the selected region
+    origin = (x_min, y_min, z_min)
 
-    x_axis = pv.Line(origin, (x_max, 0.0, 0.0))
-    y_axis = pv.Line(origin, (0.0, y_max, 0.0))
-    z_axis = pv.Line(origin, (0.0, 0.0, z_max))
+    x_axis = pv.Line(origin, (x_max, y_min, z_min))
+    y_axis = pv.Line(origin, (x_min, y_max, z_min))
+    z_axis = pv.Line(origin, (x_min, y_min, z_max))
 
-    plotter.add_mesh(x_axis, color="black", line_width=5, label="Longitude")
-    plotter.add_mesh(y_axis, color="black", line_width=5, label="Latitude")
-    plotter.add_mesh(z_axis, color="black", line_width=5, label="Depth Levels")
-
-    plotter.show_bounds(
-    xlabel="Longitude",
-    ylabel="Latitude",
-    zlabel="Depth Levels",
-)
+    plotter.add_mesh(x_axis, color="red", line_width=5)
+    plotter.add_mesh(y_axis, color="green", line_width=5)
+    plotter.add_mesh(z_axis, color="blue", line_width=5)
 
 def transform_z_axis(grid, z_max=90.0):
     """
@@ -483,8 +644,17 @@ def update_scene(time_index, hotspot_percentile):
 
     plotter.clear()
 
+    global T_ref
     # Read data
-    T, S, W, land_mask = read_time_step(time_index=time_index)
+    # T, S, W, land_mask = read_time_step(time_index=time_index)
+    T, S, W, land_mask, lat2d, lon2d = read_time_step(time_index=time_index)
+
+    T_ref = np.nanmean(T)
+    print("Computed T_ref =", T_ref, flush=True)
+
+    # T_ref = get_reference_temperature()
+
+    T_anom = T - T_ref
 
     print("T shape:", T.shape)
     print("Finite T:", np.isfinite(T).sum())
@@ -496,7 +666,8 @@ def update_scene(time_index, hotspot_percentile):
     current_time_str = current_time.strftime("%Y-%m-%d %H:%M:%S")
 
     # Build grid
-    grid = make_grid(T, S, W, land_mask)
+    # grid = make_grid(T, S, W, land_mask)
+    grid = make_grid(T, S, W, land_mask, lat2d, lon2d, T_anom)
 
     # Transform z: 0 -> 90 and 90 -> 0
     #grid = transform_z_axis(grid, z_max=90.0)
@@ -510,7 +681,11 @@ def update_scene(time_index, hotspot_percentile):
         color="black",
     )
 
-    add_origin_axes(plotter, grid)
+    # add_origin_axes(plotter, grid)
+
+    plotter.add_mesh(grid.outline(), color="black")
+
+    add_selected_region_axes(plotter, grid)
 
     # Add salinity layers colored by temperature anomaly
     layer_percentiles, layer_opacities, layer_cmap = get_salinity_layer_controls()
@@ -568,6 +743,13 @@ def update_scene(time_index, hotspot_percentile):
         plotter,
         grid,
         percentile=float(hotspot_percentile),
+    )
+
+    plotter.show_bounds(
+        bounds = grid.bounds,
+        xlabel="Longitude",
+        ylabel="Latitude",
+        zlabel="Depth Level",
     )
 
     plotter.camera_position = "iso"

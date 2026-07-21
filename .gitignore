@@ -13,7 +13,7 @@ cache/
 outputs/
 VISUS_CACHE/
 
-*.nc
+# *.nc
 *.npy
 *.npz
 *.vtk
