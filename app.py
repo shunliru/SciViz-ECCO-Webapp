@@ -41,7 +41,7 @@ READ_KWARGS = dict(
     z=[0, 90],
     x=[14000, 17200],
     y=[8000, 11000],
-    quality=-12,   # start coarse
+    quality= -9,   # start coarse
 )
 
 # Fixed color range for temperature anomaly on salinity layers
@@ -334,9 +334,9 @@ def add_selected_region_axes(plotter, grid):
     y_axis = pv.Line(origin, (x_min, y_max, z_min))
     z_axis = pv.Line(origin, (x_min, y_min, z_max))
 
-    plotter.add_mesh(x_axis, color="red", line_width=5)
-    plotter.add_mesh(y_axis, color="green", line_width=5)
-    plotter.add_mesh(z_axis, color="blue", line_width=5)
+    plotter.add_mesh(x_axis, color="black", line_width=5)
+    plotter.add_mesh(y_axis, color="black", line_width=5)
+    plotter.add_mesh(z_axis, color="black", line_width=5)
 
 def transform_z_axis(grid, z_max=90.0):
     """
@@ -539,11 +539,12 @@ def add_velocity_hotspots(plotter, grid, percentile):
     added = safe_add_mesh(
         plotter,
         hotspots,
-        scalars="W",
-        cmap="Wistia",
-        clim=(threshold, w_max),
-        opacity=0.80,
-        show_scalar_bar=False,
+        #scalars="W",
+        #cmap="Greens",
+        #clim=(threshold, w_max),
+        color = "green",
+        opacity=0.90,
+        show_scalar_bar=True,
     )
 
     if not added:
@@ -589,10 +590,11 @@ def add_downwelling_hotspots(plotter, grid, percentile=99.0):
 
     plotter.add_mesh(
         downwelling,
-        scalars="W",
-        cmap="RdPu",
-        opacity=0.80,
-        show_scalar_bar=False,
+        #scalars="W",
+        #cmap="RdPu",
+        color = "Azure",
+        opacity=0.90,
+        show_scalar_bar=True,
     )
 
     return downwelling
@@ -620,7 +622,7 @@ def add_land(plotter, grid):
     plotter.add_mesh(
         land,
         color="lightgray",
-        opacity=0.7,
+        opacity=0.5,
         show_scalar_bar=False,
     )
 
@@ -698,14 +700,14 @@ def update_scene(time_index, hotspot_percentile):
         start=1,
     ):
         layer_info_lines.append(
-            f"Layer {i}:  percentile {pct:.1f} , salinity {sal:.4f} ppt, opacity {opacity:.2f}"
+            f"Layer {i}:  percentile {pct:.1f} , salinity {sal:.4f} g/kg, opacity {opacity:.2f}"
         )
 
     layer_info_text = "\n".join(layer_info_lines)
 
     state.plot_info = f"""
-        This figure plots the North American east coast salinity isosurfaces colored by temperature anomaly. 
-        The hotspots indicate locations where vertical velocity is beyond a certain percentile. 
+        This figure plots a subregion of the North Atlantic Ocean salinity isosurfaces colored by temperature anomaly. 
+        The colored regions(Hotspots) indicate locations where vertical velocity is beyond a certain percentile. 
         Users can use the slidebar and textbox to adjust numbers. 
         Once finished, click the Load/Update button to wait for the data to load and the changes to take effect. 
 
@@ -719,10 +721,12 @@ def update_scene(time_index, hotspot_percentile):
 
         Surface geometry: salinity isosurfaces
         Surface color: temperature anomaly
-        Hotspot field: positive vertical velocity(green), negative vertical velocity(purple)
+        Colored regions: positive vertical velocity extremes(green/yellow), negative vertical velocity extremes(purple/magenta)
         """
 
-    add_land(plotter, grid)
+    # Add land if checkbox is enabled (default = True)
+    if state.show_land:
+        add_land(plotter, grid)
 
     add_salinity_layers(
         plotter,
@@ -732,24 +736,27 @@ def update_scene(time_index, hotspot_percentile):
         layer_cmap=layer_cmap,
     )
 
-    # Add vertical velocity hotspots
-    add_velocity_hotspots(
-        plotter,
-        grid,
-        percentile=float(hotspot_percentile),
-    )
+    # Add vertical velocity hotspots if checkbox is enabled (default = True)
+    if state.show_hotspots:
+        add_velocity_hotspots(
+            plotter,
+            grid,
+            percentile=float(hotspot_percentile),
+        )
 
-    add_downwelling_hotspots(
-        plotter,
-        grid,
-        percentile=float(hotspot_percentile),
-    )
+        add_downwelling_hotspots(
+            plotter,
+            grid,
+            percentile=float(hotspot_percentile),
+        )
 
     plotter.show_bounds(
-        bounds = grid.bounds,
-        xlabel="Longitude",
-        ylabel="Latitude",
-        zlabel="Depth Level",
+        bounds=grid.bounds,
+        xtitle="Longitude",
+        ytitle="Latitude",
+        ztitle="Depth",
+        grid=True,
+        location="outer",
     )
 
     plotter.camera_position = "iso"
@@ -770,8 +777,12 @@ print("Creating server...", flush=True)
 server = get_server()
 state, ctrl = server.state, server.controller
 
+state.show_land = True
+
 state.time_index = 0
 state.hotspot_percentile = 99.0
+
+state.show_hotspots = True
 
 # Salinity layer controls
 state.num_salinity_layers = 4
@@ -831,7 +842,7 @@ ctrl.load_current_time = load_current_time
 print("Building UI...", flush=True)
 
 with SinglePageWithDrawerLayout(server) as layout:
-    layout.title.set_text("ECCO Thermohaline Structure Explorer (North America)")
+    layout.title.set_text("ECCO Thermohaline Structure Explorer (North Atlantic Ocean)")
 
     with layout.toolbar:
         vuetify.VSpacer()
@@ -954,6 +965,17 @@ with SinglePageWithDrawerLayout(server) as layout:
             label="Layer colormap",
         )
 
+        vuetify.VCheckbox(
+            v_model=("show_land", True),
+            label="Show land",
+            density="compact",
+        )
+
+        vuetify.VCheckbox(
+            v_model=("show_hotspots", True),
+            label="Show vertical velocity hotspots",
+            density="compact",
+        )
 
         with vuetify.VCard(classes="pa-3 ma-2", variant="tonal"):
             vuetify.VCardTitle("Plot Information")
