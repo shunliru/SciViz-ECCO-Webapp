@@ -12,4 +12,4 @@ depth_levels = np.array([
 
 def get_depth_value(index):
     depth = depth_levels[index]
-    return f"The depth at index {index} is {depth} m."
+    return f"The depth at index {index} is {depth:.1f} m."
