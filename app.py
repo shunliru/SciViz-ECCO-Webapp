@@ -11,6 +11,12 @@ from pyvista.trame.ui import plotter_ui
 
 from datetime import datetime, timedelta
 
+import matplotlib
+matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt
+import numpy as np
+
 import xarray as xr
 
 # =========================================================
@@ -39,8 +45,17 @@ TIME_MAX = 10000
 # Region / quality
 READ_KWARGS = dict(
     z=[0, 90],
+    # north atlantic
     x=[14000, 17200],
     y=[8000, 11000],
+    
+    # japan sea
+    #x = [7500, 9700],
+    #y = [9000, 11000],
+
+    # australia
+    #x = [9000, 10200],
+    #y = [5200, 7600],
     quality= -9,   # start coarse
 )
 
@@ -125,6 +140,88 @@ def read_time_step(time_index):
     )
     return T, S, W, land_mask, lat, lon
 
+def plot_salinity_histograms(timesteps):
+
+    for t in timesteps:
+
+        print(f"Generating histogram for timestep {t}...", flush=True)
+
+        # Read salinity
+        T, S, W, land_mask, lat2d, lon2d = read_time_step(t)
+
+        # Remove land / invalid values
+        S_valid = S[
+            np.isfinite(S) &
+            (S != 0)
+        ]
+
+        # Percentiles
+        p25 = np.percentile(S_valid, 5)
+        p50 = np.percentile(S_valid, 45)
+        p75 = np.percentile(S_valid, 80)
+
+        print(
+            f"t={t}: "
+            f"25th percentile = {p25: 4f},"
+            f"50th percentile = {p50:.4f}, "
+            f"75th percentile = {p75:.4f}"
+        )
+
+        # Create separate histogram
+        fig, ax = plt.subplots(figsize=(9, 6))
+
+        ax.hist(
+            S_valid,
+            bins=np.linspace(30, 40, 101),
+            density=True,
+            edgecolor="black",
+            alpha=0.8,
+        )
+
+        ax.axvline(
+            p25,
+            color="red",
+            linestyle="-.",
+            linewidth=2,
+            label=f"25th percentile = {p25:.3f}"
+            )
+
+        ax.axvline(
+            p50,
+            color="red",
+            linestyle="--",
+            linewidth=2,
+            label=f"50th percentile = {p50:.3f}"
+        )
+
+        ax.axvline(
+            p75,
+            color="red",
+            linestyle=":",
+            linewidth=2,
+            label=f"75th percentile = {p75:.3f}"
+        )
+
+        ax.set_xlabel("Salinity (g kg$^{-1}$)")
+        ax.set_ylabel("Probability Density")
+        ax.set_title(f"Salinity Distribution — Time Step {t}")
+
+        ax.set_xlim(30, 40)
+
+        ax.legend()
+        ax.grid(alpha=0.3)
+
+        fig.tight_layout()
+
+        fig.savefig(
+            f"salinity_histogram_t{t}.png",
+            dpi=150,
+            bbox_inches="tight"
+        )
+
+        plt.close(fig)
+
+        print(f"Saved salinity_histogram_t{t}.png", flush=True)
 # =========================================================
 # 4. DATE CONVERSION
 # =========================================================
@@ -1000,6 +1097,9 @@ with SinglePageWithDrawerLayout(server) as layout:
 # 15. START
 # =========================================================
 
+
 if __name__ == "__main__":
+    # plot_salinity_histograms([2000, 4000, 6000, 8000])
+
     print("Starting server...", flush=True)
     server.start()
