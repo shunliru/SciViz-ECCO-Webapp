@@ -1,4 +1,6 @@
 import os
+import base64
+from io import BytesIO
 import numpy as np
 import pyvista as pv
 import openvisuspy as ovp
@@ -15,7 +17,6 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
-import numpy as np
 
 import xarray as xr
 
@@ -45,8 +46,12 @@ TIME_MAX = 10000
 # Region / quality
 READ_KWARGS = dict(
     z=[0, 90],
+    # global
+    #x = [0, 17280],
+    #y = [0, 12960],
+
     # north atlantic
-    x=[14000, 17200],
+    x=[14000, 17280],
     y=[8000, 11000],
     
     # japan sea
@@ -414,7 +419,7 @@ def make_grid(T, S, W, land_mask, lat2d, lon2d, T_anom):
 #     zlabel="Depth Levels",
 # )
 
-def add_selected_region_axes(plotter, grid):
+def add_selected_region_axes(plotter, grid, thick_axis_color):
     """
     Draw axes using the selected region's bounding box.
     """
@@ -431,9 +436,9 @@ def add_selected_region_axes(plotter, grid):
     y_axis = pv.Line(origin, (x_min, y_max, z_min))
     z_axis = pv.Line(origin, (x_min, y_min, z_max))
 
-    plotter.add_mesh(x_axis, color="black", line_width=5)
-    plotter.add_mesh(y_axis, color="black", line_width=5)
-    plotter.add_mesh(z_axis, color="black", line_width=5)
+    plotter.add_mesh(x_axis, color=thick_axis_color, line_width=5)
+    plotter.add_mesh(y_axis, color=thick_axis_color, line_width=5)
+    plotter.add_mesh(z_axis, color=thick_axis_color, line_width=5)
 
 def transform_z_axis(grid, z_max=90.0):
     """
@@ -473,6 +478,7 @@ def add_salinity_layers(
     layer_percentiles,
     layer_opacities,
     layer_cmap,
+    legend_color
 ):
     """
     Create salinity isosurfaces from user-selected salinity percentiles.
@@ -515,7 +521,8 @@ def add_salinity_layers(
             opacity=float(opacity),
             show_scalar_bar=not first_added,
             scalar_bar_args={
-                "title": "Temperature anomaly",
+                "title": "Temperature anomaly (°C)",
+                "color": legend_color,
             },
         )
 
@@ -689,7 +696,7 @@ def add_downwelling_hotspots(plotter, grid, percentile=99.0):
         downwelling,
         #scalars="W",
         #cmap="RdPu",
-        color = "Azure",
+        color = "Magenta",
         opacity=0.90,
         show_scalar_bar=True,
     )
@@ -730,6 +737,73 @@ def add_land(plotter, grid):
 # 12. SCENE UPDATE
 # =========================================================
 
+# Keep only the latest loaded salinity array on the server. The browser receives
+# a small PNG, not the full 3D dataset. Percentiles are a snapshot of the controls
+# applied with Load / Update, so the histogram and isosurfaces stay consistent.
+_histogram_data = None
+
+
+def make_salinity_histogram_image(S, time_index, percentiles):
+    """Return a density-histogram PNG data URL and a short sample summary.
+
+    Samples are equally weighted (not ocean-cell-volume weighted). All depths
+    in READ_KWARGS are included at the selected read quality.
+    """
+    values = np.asarray(S)
+    values = values[np.isfinite(values) & (values != 0)]
+    if values.size == 0:
+        return "", "No valid ocean salinity values in this region."
+
+    fig, ax = plt.subplots(figsize=(6.4, 4.4), dpi=120)
+    try:
+        # An integer bin count spans the entire finite data range. Do not clip
+        # to 30--40: that would normalize only the samples within that range.
+        ax.hist(values, bins=100, density=True, color="#4682b4",
+                edgecolor="white", linewidth=0.3, alpha=0.85)
+        styles = ["--", "-.", ":", (0, (5, 2, 1, 2, 1, 2))]
+        levels = np.percentile(values, percentiles) if percentiles else []
+        for i, (pct, level) in enumerate(zip(percentiles, levels)):
+            ax.axvline(float(level), color="red", linewidth=1.8,
+                       linestyle=styles[i % len(styles)],
+                       label=f"Layer {i + 1}: P{pct:g} = {level:.3f} g/kg")
+
+        ax.set_xlabel("Salinity (g/kg)")
+        ax.set_ylabel("Probability density (g/kg)$^{-1}$")
+        date = get_datetime_from_timestep(time_index).strftime("%Y-%m-%d %H:%M")
+        ax.set_title(f"Salinity PDF — timestep {int(time_index)}\n{date}", fontsize=11)
+        ax.grid(axis="y", alpha=0.25)
+        ax.set_axisbelow(True)
+        if percentiles:
+            ax.legend(fontsize=8, loc="best")
+        fig.tight_layout()
+        with BytesIO() as buffer:
+            fig.savefig(buffer, format="png", facecolor="white")
+            image = base64.b64encode(buffer.getvalue()).decode("ascii")
+        return "data:image/png;base64," + image, (
+            f"{values.size:,} valid samples; all selected depth levels. "
+            "Equal sample weighting; histogram area = 1."
+        )
+    finally:
+        plt.close(fig)
+
+
+def refresh_salinity_histogram():
+    """Render on demand, without reading another timestep or rebuilding VTK."""
+    if not state.show_histogram or _histogram_data is None:
+        return
+    if state.histogram_image:
+        return  # Reopening an unchanged histogram needs no computation.
+    S, time_index, percentiles = _histogram_data
+    try:
+        state.histogram_image, state.histogram_message = make_salinity_histogram_image(
+            S, time_index, percentiles
+        )
+    except Exception as exc:
+        state.histogram_image = ""
+        state.histogram_message = f"Could not generate histogram: {exc}"
+        print(state.histogram_message, flush=True)
+
+
 plotter = pv.Plotter()
 plotter.set_background("white")
 
@@ -742,8 +816,21 @@ def update_scene(time_index, hotspot_percentile):
     print(f"Updating scene: time={time_index}, hotspot_percentile={hotspot_percentile}")
 
     plotter.clear()
+    if state.plot_bg == "light":
+        plotter.set_background("white")
+        axis_color = "#1e1e1e"
+        grid_color = "#1e1e1e"
+        legend_color = "black"
+        thick_axis_color = "black"
+    else: 
+        # dark backgound
+        plotter.set_background("#1e1e1e")
+        axis_color = "white"
+        grid_color = "white"
+        legend_color = "white"
+        thick_axis_color = "#edfd04"   # bright yellow
 
-    global T_ref
+    global T_ref, _histogram_data
     # Read data
     # T, S, W, land_mask = read_time_step(time_index=time_index)
     T, S, W, land_mask, lat2d, lon2d = read_time_step(time_index=time_index)
@@ -777,14 +864,14 @@ def update_scene(time_index, hotspot_percentile):
     # Add outline
     plotter.add_mesh(
         grid.outline(),
-        color="black",
+        color=grid_color,
     )
 
     # add_origin_axes(plotter, grid)
 
-    plotter.add_mesh(grid.outline(), color="black")
+    # plotter.add_mesh(grid.outline(), color="white")
 
-    add_selected_region_axes(plotter, grid)
+    add_selected_region_axes(plotter, grid, thick_axis_color=thick_axis_color)
 
     # Add salinity layers colored by temperature anomaly
     layer_percentiles, layer_opacities, layer_cmap = get_salinity_layer_controls()
@@ -831,6 +918,7 @@ def update_scene(time_index, hotspot_percentile):
         layer_percentiles=layer_percentiles,
         layer_opacities=layer_opacities,
         layer_cmap=layer_cmap,
+        legend_color=legend_color
     )
 
     # Add vertical velocity hotspots if checkbox is enabled (default = True)
@@ -852,11 +940,22 @@ def update_scene(time_index, hotspot_percentile):
         xtitle="Longitude",
         ytitle="Latitude",
         ztitle="Depth",
+        color=axis_color,
         grid=True,
         location="outer",
     )
 
     plotter.camera_position = "iso"
+
+    # Commit histogram data only after the selected scene has been built.
+    _histogram_data = (S, int(time_index), list(layer_percentiles))
+    state.histogram_image = ""
+    state.histogram_message = ""
+    state.histogram_region = (
+        f"x={READ_KWARGS['x']}, y={READ_KWARGS['y']}, "
+        f"z={READ_KWARGS['z']}; quality={READ_KWARGS['quality']}"
+    )
+    refresh_salinity_histogram()
 
     # Update browser view if available
     try:
@@ -874,12 +973,26 @@ print("Creating server...", flush=True)
 server = get_server()
 state, ctrl = server.state, server.controller
 
+state.ui_theme = "light"
+state.plot_bg = "light"
+
 state.show_land = True
 
 state.time_index = 0
 state.hotspot_percentile = 99.0
 
 state.show_hotspots = True
+
+state.show_histogram = False
+state.histogram_image = ""
+state.histogram_region = ""
+state.histogram_message = 'Click "Load / Update Time Step" to load the selected data.'
+
+
+@state.change("show_histogram")
+def on_histogram_visibility_change(show_histogram, **kwargs):
+    if show_histogram:
+        refresh_salinity_histogram()
 
 # Salinity layer controls
 state.num_salinity_layers = 4
@@ -938,11 +1051,34 @@ ctrl.load_current_time = load_current_time
 # =========================================================
 print("Building UI...", flush=True)
 
-with SinglePageWithDrawerLayout(server) as layout:
+with SinglePageWithDrawerLayout(server, theme = ("ui_theme", "light")) as layout:
+    
     layout.title.set_text("ECCO Thermohaline Structure Explorer (North Atlantic Ocean)")
+
 
     with layout.toolbar:
         vuetify.VSpacer()
+        vuetify.VSwitch(
+            v_model=("show_histogram", False),
+            label="Histogram",
+            color="primary",
+            density="compact",
+            hide_details=True,
+            inset=True,
+            classes="mr-4",
+            style="flex: 0 0 auto;",
+        )
+        vuetify.VSwitch(
+            v_model=("ui_theme", "light"),
+            label="Dark mode",
+            true_value="dark",
+            false_value="light",
+            density="compact",
+            hide_details=True,
+            inset=True,
+            classes="mr-4",
+            style="flex: 0 0 auto;",
+        )
 
     with layout.drawer:
 
@@ -955,6 +1091,15 @@ with SinglePageWithDrawerLayout(server) as layout:
             step=10,
             label="Time index",
             thumb_label=True,
+        )
+        vuetify.VTextField(
+            v_model=("time_index", 0),
+            label="Time index (exact value)",
+            type="number",
+            min=TIME_MIN,
+            max=TIME_MAX,
+            step=1,
+            density="compact",
         )
 
         vuetify.VSlider(
@@ -1062,6 +1207,13 @@ with SinglePageWithDrawerLayout(server) as layout:
             label="Layer colormap",
         )
 
+        vuetify.VSelect(
+            v_model=("plot_bg", "light"),
+            items=(["light", "dark"],),
+            label="Plot background color",
+            #density="compact",
+        )
+
         vuetify.VCheckbox(
             v_model=("show_land", True),
             label="Show land",
@@ -1089,8 +1241,39 @@ with SinglePageWithDrawerLayout(server) as layout:
         )
 
     with layout.content:
-        view = plotter_ui(plotter)
-        ctrl.view_update = view.update
+        with html.Div(style="position: relative; width: 100%; height: 100%;"):
+            view = plotter_ui(plotter)
+            ctrl.view_update = view.update
+
+            # Floating top-right panel; hiding it does not resize the 3D view.
+            with vuetify.VCard(
+                v_show=("show_histogram",),
+                elevation=6,
+                style=("position: absolute; top: 12px; right: 12px; z-index: 5; "
+                       "width: min(540px, calc(100% - 24px)); "
+                       "max-height: calc(100% - 24px); overflow-y: auto;"),
+            ):
+                with html.Div(classes="d-flex align-center px-3 pt-2"):
+                    html.Div("Salinity histogram", classes="text-subtitle-1")
+                    vuetify.VSpacer()
+                    vuetify.VBtn("Close", variant="text", size="small",
+                                 click="show_histogram = false")
+                html.Img(
+                    v_if=("histogram_image",),
+                    src=("histogram_image",),
+                    alt="Salinity probability density with selected percentile lines",
+                    style="display: block; width: 100%; height: auto;",
+                )
+                html.Div("{{ histogram_message }}", classes="px-3 pb-2",
+                         style="font-size: 12px;")
+                html.Div("{{ histogram_region }}", classes="px-3 pb-2",
+                         style="font-size: 11px; overflow-wrap: anywhere;")
+                html.Div(
+                    "Uses the timestep and active layer percentiles from the last "
+                    "Load / Update. Edit the left controls, then click Load / Update "
+                    "to apply changes to both plots.",
+                    classes="px-3 pb-3", style="font-size: 12px; color: #555;",
+                )
 
 
 # =========================================================
